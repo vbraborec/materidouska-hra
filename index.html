@@ -42,11 +42,13 @@
     <h2>Ovládání</h2>
     <p><kbd>←</kbd> <kbd>→</kbd> / <kbd>A</kbd> <kbd>D</kbd> pohyb</p>
     <p><kbd>Mezerník</kbd> aktivace posily</p>
+    <p><kbd>F</kbd> rychlost běhu 1× / 2× / 3×</p>
     <p><kbd>P</kbd> / <kbd>Esc</kbd> pauza</p>
     <p><kbd>Enter</kbd> restart</p>
     <p>Střelba je automatická.</p>
     <h2>Na mobilu</h2>
-    <p>Tažení prstem = pohyb.<br>Krátký tap = posila.</p>
+    <p>Tažení prstem = pohyb.<br>Krátký tap = posila.<br>Tlačítka vpravo nahoře =
+    rychlost a pauza.</p>
   </aside>
 
   <div id="stage"><canvas id="c" width="600" height="800"></canvas></div>
@@ -57,6 +59,10 @@
     <div class="legend"><svg class="swatch" viewBox="0 0 20 20"><path d="M10 2 L18.5 17.5 L1.5 17.5 Z" fill="#33243a" stroke="#d99a5b" stroke-width="2"/></svg><span>riziko — <span class="tag">bere život</span></span></div>
     <div class="legend"><svg class="swatch" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f0e2a8" stroke="#fff6d8" stroke-width="2"/></svg><span>káva — <span class="tag">posila do slotu</span></span></div>
     <div class="legend"><svg class="swatch" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5" fill="#f2a8c8" stroke="#ffd9ea" stroke-width="2"/></svg><span>srdíčko — <span class="tag">body</span></span></div>
+    <h2>Zrychlení</h2>
+    <p>Zrychlí celý běh, ne jen pád objektů. Začátek jde proletět rychleji,
+    ale hraje se pořád — jen máš míň času reagovat. Skóre zůstává
+    porovnatelné.</p>
     <h2>Poznámka</h2>
     <p>Hranaté + rotace = nebezpečí.<br>Kulaté + vlnění = pomoc.<br>Barva je jen doplněk.</p>
   </aside>
@@ -128,6 +134,13 @@ const CONFIG = {
     powerup_overflow: 600      // ~3× drobnost, nikdy víc než užitek z aktivace
   },
 
+  // Zrychlení běhu. Nemění simulaci — za jeden vykreslený snímek se jen
+  // odsimuluje víc pevných kroků. Hráč projde stejné snímky se stejnou
+  // nabídkou bodů, jen má míň reálného času reagovat. Skóre proto zůstává
+  // porovnatelné a začátek se nedá projít „zadarmo".
+  speeds: [1, 2, 3],
+  hudBtn: { size: 56, y: 8 },
+
   // Bezpečnostní limity §13 — nepřekračovat.
   a11y: { maxPulseHz: 2.0, maxPulseAmp: 0.20, fadeOutFrames: 12 }
 };
@@ -171,7 +184,7 @@ const POWERUP_TYPES = {
   meeting: { id:'meeting', label:'Porada',         effect:'stopSpawn', durationFrames: 3*60,  fill:'#e0d0f0', stroke:'#f4ecff', enabled:false }
 };
 
-const ACTION = { MOVE:1, ACTIVATE:2, TARGET_X:3, PAUSE:4 };
+const ACTION = { MOVE:1, ACTIVATE:2, TARGET_X:3, PAUSE:4, SPEED:5 };
 
 /* ------------------------------- Náhoda --------------------------------- */
 /* Vlastní seedovaný PRNG. Math.random() se v celém souboru nepoužívá —
@@ -232,6 +245,7 @@ const input = {
   axis: 0,                 // -1 / 0 / +1 (klávesnice)
   activatePressed: false,  // hrana, konzumuje ji logika
   pausePressed: false,
+  speedPressed: false,
   restartPressed: false,
   method: null             // 'keyboard' | 'touch' — první použitý vstup rozhoduje
 };
@@ -250,12 +264,13 @@ function initInput(canvas) {
   /* --- klávesnice --- */
   addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
-    if (['arrowleft','arrowright','a','d',' ','p','escape','enter'].includes(k)) e.preventDefault();
+    if (['arrowleft','arrowright','a','d',' ','p','escape','enter','f'].includes(k)) e.preventDefault();
     if (keys.has(k)) return;
     keys.add(k);
     if (!input.method) input.method = 'keyboard';
     if (k === ' ')      input.activatePressed = true;
     if (k === 'p' || k === 'escape') input.pausePressed = true;
+    if (k === 'f')      input.speedPressed = true;
     if (k === 'enter')  input.restartPressed = true;
     updateAxis();
   });
@@ -278,8 +293,11 @@ function initInput(canvas) {
     touchId = t.identifier;
     if (!input.method) input.method = 'touch';
     const p = toLogical(t.clientX, t.clientY);
-    // Tap na ikonu pauzy (pravý horní roh, cíl 56×56)
-    if (p.x > CONFIG.W - 64 && p.y < 64) { input.pausePressed = true; touchId = null; return; }
+    // Tap na tlačítka v HUD (cíle 56×56, §15.2)
+    if (p.y < 64) {
+      if (p.x > CONFIG.W - 64)  { input.pausePressed = true; touchId = null; return; }
+      if (p.x > CONFIG.W - 128) { input.speedPressed = true; touchId = null; return; }
+    }
     tStartMs = performance.now(); tStartX = p.x; tStartY = p.y; moved = 0;
     applyTouch(p);
   }, { passive: false });
@@ -339,6 +357,7 @@ function newGame(modeId) {
     // běh
     state: 'playing',            // playing | paused | over
     frame: 0,
+    speedIdx: 0,                 // index do CONFIG.speeds
     wantPause: false,
 
     // hráč
@@ -369,6 +388,15 @@ function newGame(modeId) {
 
     lastRun: null
   };
+}
+
+function gameSpeed() { return CONFIG.speeds[game.speedIdx]; }
+
+/* Herní čas = odsimulované snímky, ne reálný čas. Při zrychlení jde nahoru
+   rychleji — což je smysl věci: hráč se posouvá po křivce obtížnosti dřív. */
+function formatTime(frames) {
+  const total = Math.floor(frames / CONFIG.FPS);
+  return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
 }
 
 /* ------------------------------- Skóre ---------------------------------- */
@@ -590,12 +618,22 @@ function update() {
     else if (game.state === 'paused') game.state = 'playing';
   }
   if (game.state === 'over') {
-    if (input.restartPressed) { const m = game.mode; game = newGame(m); }
-    input.restartPressed = false; input.activatePressed = false;
+    if (input.restartPressed) {
+      const m = game.mode, sp = game.speedIdx;
+      game = newGame(m);
+      game.speedIdx = sp;          // zvolená rychlost přežije restart
+    }
+    input.restartPressed = false; input.activatePressed = false; input.speedPressed = false;
     return;
   }
   input.restartPressed = false;
-  if (game.state === 'paused') { input.activatePressed = false; return; }
+  if (game.state === 'paused') { input.activatePressed = false; input.speedPressed = false; return; }
+
+  if (input.speedPressed) {
+    input.speedPressed = false;
+    game.speedIdx = (game.speedIdx + 1) % CONFIG.speeds.length;
+    game.inputLog.push([game.frame, ACTION.SPEED, gameSpeed()]);
+  }
 
   const dt = CONFIG.DT;
   const ts = timeScale();
@@ -778,7 +816,8 @@ function draw() {
   drawHud();
 
   if (game.state === 'paused') drawOverlay('Pauza', [
-    input.method === 'touch' ? 'Tap na ikonu pauzy — pokračovat' : 'P / Esc — pokračovat'
+    input.method === 'touch' ? 'Tap na ikonu pauzy — pokračovat' : 'P / Esc — pokračovat',
+    input.method === 'touch' ? 'Tlačítko ▶▶ — rychlost běhu' : 'F — rychlost běhu (1× / 2× / 3×)'
   ]);
   if (game.state === 'over') drawGameOver();
 }
@@ -980,6 +1019,17 @@ function drawHud() {
     ctx.textAlign = 'left';
   }
 
+  // herní čas
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = '700 22px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = C.hud;
+  ctx.fillText(formatTime(game.frame), CONFIG.W / 2, 88);
+  ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = C.hudDim;
+  ctx.fillText('čas', CONFIG.W / 2, 102);
+  ctx.restore();
+
   // ikona pauzy — dotykový cíl 56×56 (§15.2)
   ctx.save();
   ctx.globalAlpha = 0.7;
@@ -987,6 +1037,36 @@ function drawHud() {
   ctx.fillRect(CONFIG.W - 42, 26, 6, 22);
   ctx.fillRect(CONFIG.W - 30, 26, 6, 22);
   ctx.restore();
+
+  drawSpeedButton();
+}
+
+/* Tlačítko zrychlení. Aktivní stav se pozná rámečkem a textem, ne jen barvou,
+   a nic nepulzuje ani nebliká (§13, §15.2). */
+function drawSpeedButton() {
+  const active = game.speedIdx > 0;
+  const cx = CONFIG.W - 96, cy = 36;
+
+  ctx.save();
+  if (active) {
+    ctx.beginPath();
+    ctx.roundRect(cx - 27, CONFIG.hudBtn.y, 54, 54, 10);
+    ctx.strokeStyle = C.leafLine; ctx.lineWidth = 2; ctx.stroke();
+  }
+  ctx.globalAlpha = active ? 1 : 0.6;
+  ctx.fillStyle = active ? C.leafLine : C.hudDim;
+
+  // dvojitá šipka ▶▶
+  for (const dx of [-10, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + dx, cy - 9); ctx.lineTo(cx + dx + 9, cy); ctx.lineTo(cx + dx, cy + 9);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.font = '700 12px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(gameSpeed() + '×', cx, cy + 24);
+  ctx.restore();
+  ctx.textAlign = 'left';
 }
 
 function drawOverlay(title, lines) {
@@ -1010,7 +1090,7 @@ function drawGameOver() {
   const best = bestScore(r.inputMethod);
   drawOverlay('Konec hry', [
     'režim: ' + MODES[r.mode].label + ' · ovládání: ' + method,
-    'čas: ' + (r.durationFrames / 60).toFixed(1) + ' s',
+    'herní čas: ' + formatTime(r.durationFrames),
     'nejlepší (' + method + '): ' + best,
     '',
     input.method === 'touch' ? 'Tap — hrát znovu' : 'Enter — hrát znovu'
@@ -1059,7 +1139,16 @@ function main() {
     if (delta > 250) delta = step;          // po pauze/přepnutí tabu nedohánět
     acc += delta;
     let guard = 0;
-    while (acc >= step && guard++ < 5) { update(); acc -= step; }
+    while (acc >= step && guard++ < 6) {
+      // Zrychlení = víc pevných kroků na jeden vykreslený snímek.
+      // Krok samotný se nemění, takže simulace zůstává identická.
+      const steps = game.state === 'playing' ? gameSpeed() : 1;
+      for (let k = 0; k < steps; k++) {
+        update();
+        if (game.state !== 'playing') break;
+      }
+      acc -= step;
+    }
     draw();
   }
   requestAnimationFrame(frame);

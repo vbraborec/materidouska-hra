@@ -12,6 +12,7 @@ Barevné tvary místo grafiky, žádné menu, žádný zvuk.
 |---|---|
 | ← → / A D | pohyb |
 | Mezerník | aktivace uložené posily |
+| F | rychlost běhu 1× / 2× / 3× |
 | P / Esc | pauza |
 | Enter | restart po konci hry |
 
@@ -19,7 +20,8 @@ Barevné tvary místo grafiky, žádné menu, žádný zvuk.
 |---|---|
 | tažení prstem | pohyb (přímé pozicování) |
 | krátký tap | aktivace posily / restart |
-| tap na ikonu vpravo nahoře | pauza |
+| tlačítko ▶▶ vpravo nahoře | rychlost běhu |
+| ikona pauzy vpravo nahoře | pauza |
 
 Střelba je automatická u obou vstupů.
 
@@ -48,6 +50,27 @@ Plynulé vlnění zůstává vyhrazené posilám, aby se kategorie nepletly. Blo
 je navíc omezené na ±150 px od sloupce, kde riziko vzniklo.
 
 **Křivka obtížnosti a bodové hodnoty jsou jiné než v §6.1.** Viz Balancování.
+
+## Herní čas a zrychlení
+
+V HUD běží **herní čas** — počet odsimulovaných snímků, ne reálný čas.
+Ukazuje polohu na křivce obtížnosti; při zrychlení jde nahoru rychleji.
+
+Tlačítko **F** (na mobilu ▶▶) přepíná rychlost běhu 1× / 2× / 3×. Zkušený
+hráč tak proletí nudný začátek dřív, než přijde výzva.
+
+Implementačně se za jeden vykreslený snímek odsimuluje víc pevných kroků.
+**Simulace se tím nemění** — mění se jen tempo přehrávání:
+
+- běh se stejným seedem skončí při 1× i 3× na stejném snímku se stejným
+  skóre (ověřeno v testu)
+- determinismus a pozdější ověřování skóre přehráním záznamu zůstávají
+  v platnosti; přepnutí rychlosti se zapisuje do `inputLog` jako akce `5`
+- začátek se nedá „profarmit": hráč projde stejné snímky se stejnou nabídkou
+  bodů, jen má míň reálného času reagovat. Zrychlení je tedy volba mezi
+  nudou a rizikem, ne zkratka ke skóre — proto není nijak penalizované.
+
+Zvolená rychlost přežije restart, aby se nemusela klikat před každým během.
 
 ## Technický základ
 
@@ -105,6 +128,10 @@ doplňovat zpětně:
 - `POWERUP_TYPES` — všech 5 posil z §8, aktivní je jen káva
 - `audio.play(name)` — prázdná abstrakce, volá se na všech 9 místech
 - `rulesVersion`, `inputMethod`, `seed`, `inputLog` v záznamu běhu
+
+Ve v1 bude potřeba doplnit, jestli hráč zrychlení používal — pro žebříček to
+sice není nutné (simulace je totožná), ale je to zajímavý údaj o tom, jak
+dlouho hráče baví lehká část.
 
 ## Balancování
 
