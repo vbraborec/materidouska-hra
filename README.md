@@ -12,7 +12,7 @@ Barevné tvary místo grafiky, žádné menu, žádný zvuk.
 |---|---|
 | ← → / A D | pohyb |
 | Mezerník | aktivace uložené posily |
-| F | rychlost běhu 1× / 2× / 3× |
+| F | zrychlení 1× / 2× |
 | P / Esc | pauza |
 | Enter | restart po konci hry |
 
@@ -20,7 +20,7 @@ Barevné tvary místo grafiky, žádné menu, žádný zvuk.
 |---|---|
 | tažení prstem | pohyb (přímé pozicování) |
 | krátký tap | aktivace posily / restart |
-| tlačítko ▶▶ vpravo nahoře | rychlost běhu |
+| tlačítko ▶▶ vpravo nahoře | zrychlení |
 | ikona pauzy vpravo nahoře | pauza |
 
 Střelba je automatická u obou vstupů.
@@ -56,13 +56,14 @@ je navíc omezené na ±150 px od sloupce, kde riziko vzniklo.
 V HUD běží **herní čas** — počet odsimulovaných snímků, ne reálný čas.
 Ukazuje polohu na křivce obtížnosti; při zrychlení jde nahoru rychleji.
 
-Tlačítko **F** (na mobilu ▶▶) přepíná rychlost běhu 1× / 2× / 3×. Zkušený
-hráč tak proletí nudný začátek dřív, než přijde výzva.
+Tlačítko **F** (na mobilu ▶▶) přepíná mezi 1× a 2×. Zkušený hráč tak proletí
+nudný začátek dřív, než přijde výzva. Stupně jsou záměrně jen dva — se třemi
+vede návrat na 1× přes dvě stisknutí, což při zrychlené hře vadí.
 
 Implementačně se za jeden vykreslený snímek odsimuluje víc pevných kroků.
 **Simulace se tím nemění** — mění se jen tempo přehrávání:
 
-- běh se stejným seedem skončí při 1× i 3× na stejném snímku se stejným
+- běh se stejným seedem skončí při 1× i 2× na stejném snímku se stejným
   skóre (ověřeno v testu)
 - determinismus a pozdější ověřování skóre přehráním záznamu zůstávají
   v platnosti; přepnutí rychlosti se zapisuje do `inputLog` jako akce `5`

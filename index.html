@@ -42,7 +42,7 @@
     <h2>Ovládání</h2>
     <p><kbd>←</kbd> <kbd>→</kbd> / <kbd>A</kbd> <kbd>D</kbd> pohyb</p>
     <p><kbd>Mezerník</kbd> aktivace posily</p>
-    <p><kbd>F</kbd> rychlost běhu 1× / 2× / 3×</p>
+    <p><kbd>F</kbd> zrychlení 1× / 2×</p>
     <p><kbd>P</kbd> / <kbd>Esc</kbd> pauza</p>
     <p><kbd>Enter</kbd> restart</p>
     <p>Střelba je automatická.</p>
@@ -138,7 +138,9 @@ const CONFIG = {
   // odsimuluje víc pevných kroků. Hráč projde stejné snímky se stejnou
   // nabídkou bodů, jen má míň reálného času reagovat. Skóre proto zůstává
   // porovnatelné a začátek se nedá projít „zadarmo".
-  speeds: [1, 2, 3],
+  // Jen dva stupně, tedy prostý přepínač: se třemi je návrat na 1× přes
+  // dvě stisknutí, což při zrychlené hře vadí.
+  speeds: [1, 2],
   hudBtn: { size: 56, y: 8 },
 
   // Bezpečnostní limity §13 — nepřekračovat.
@@ -817,7 +819,7 @@ function draw() {
 
   if (game.state === 'paused') drawOverlay('Pauza', [
     input.method === 'touch' ? 'Tap na ikonu pauzy — pokračovat' : 'P / Esc — pokračovat',
-    input.method === 'touch' ? 'Tlačítko ▶▶ — rychlost běhu' : 'F — rychlost běhu (1× / 2× / 3×)'
+    input.method === 'touch' ? 'Tlačítko ▶▶ — zrychlení' : 'F — zrychlení (1× / 2×)'
   ]);
   if (game.state === 'over') drawGameOver();
 }
