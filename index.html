@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Mateřídouška — prototyp v0</title>
+<style>
+  :root{
+    --bg-page:#0d0714;
+    --bg-panel:#150d1f;
+    --ink:#e8dcf2;
+    --ink-dim:#9b8bab;
+    --brand-pink:#e05fa8;
+    --brand-purple:#7b3f8f;
+    --brand-olive:#b7c94a;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;background:var(--bg-page);color:var(--ink);
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;overflow:hidden;}
+  #app{height:100%;display:flex;align-items:center;justify-content:center;gap:28px;padding:12px;}
+  #stage{height:100%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;}
+  canvas{display:block;touch-action:none;-webkit-user-select:none;user-select:none;
+    border-radius:10px;box-shadow:0 0 0 2px #2c1c3d;}
+  .side{width:220px;flex:0 0 auto;color:var(--ink-dim);font-size:14px;line-height:1.55;}
+  .side h1{font-size:20px;letter-spacing:.14em;text-transform:uppercase;color:var(--brand-pink);margin:0 0 4px;}
+  .side h2{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-dim);
+    margin:22px 0 6px;font-weight:600;}
+  .side p{margin:4px 0;}
+  .side .tag{color:var(--ink);}
+  .side kbd{background:#241633;border:1px solid #3d2952;border-radius:4px;padding:1px 6px;
+    font-family:inherit;font-size:12px;color:var(--ink);}
+  .legend{display:flex;align-items:center;gap:9px;margin:6px 0;}
+  .swatch{width:18px;height:18px;flex:0 0 auto;}
+  @media (max-width:1040px){ .side{display:none;} #app{gap:0;padding:0;} }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside class="side">
+    <h1>Mateřídouška</h1>
+    <p>prototyp v0 — barevné tvary místo grafiky</p>
+    <h2>Ovládání</h2>
+    <p><kbd>←</kbd> <kbd>→</kbd> / <kbd>A</kbd> <kbd>D</kbd> pohyb</p>
+    <p><kbd>Mezerník</kbd> aktivace posily</p>
+    <p><kbd>P</kbd> / <kbd>Esc</kbd> pauza</p>
+    <p><kbd>Enter</kbd> restart</p>
+    <p>Střelba je automatická.</p>
+    <h2>Na mobilu</h2>
+    <p>Tažení prstem = pohyb.<br>Krátký tap = posila.</p>
+  </aside>
+
+  <div id="stage"><canvas id="c" width="600" height="800"></canvas></div>
+
+  <aside class="side">
+    <h2>Co je co</h2>
+    <div class="legend"><svg class="swatch" viewBox="0 0 20 20"><rect x="3" y="1.5" width="14" height="17" fill="#2b2140" stroke="#8f7fb0" stroke-width="2"/></svg><span>dokument — <span class="tag">zpomalí střelbu</span></span></div>
+    <div class="legend"><svg class="swatch" viewBox="0 0 20 20"><path d="M10 2 L18.5 17.5 L1.5 17.5 Z" fill="#33243a" stroke="#d99a5b" stroke-width="2"/></svg><span>riziko — <span class="tag">bere život</span></span></div>
+    <div class="legend"><svg class="swatch" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f0e2a8" stroke="#fff6d8" stroke-width="2"/></svg><span>káva — <span class="tag">posila do slotu</span></span></div>
+    <div class="legend"><svg class="swatch" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5" fill="#f2a8c8" stroke="#ffd9ea" stroke-width="2"/></svg><span>srdíčko — <span class="tag">body</span></span></div>
+    <h2>Poznámka</h2>
+    <p>Hranaté + rotace = nebezpečí.<br>Kulaté + vlnění = pomoc.<br>Barva je jen doplněk.</p>
+  </aside>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   Hra Mateřídouška — prototyp v0
+   Vanilla JS + Canvas 2D. Pevný krok 60 Hz, seedovaný PRNG, jeden stavový
+   objekt `game`. Viz specifikace v0 (README.md).
+   ========================================================================= */
+
+/* ------------------------------- Konfigurace ---------------------------- */
+
+const CONFIG = {
+  W: 600, H: 800,
+  FPS: 60,
+  DT: 1 / 60,
+  rulesVersion: 1,
+
+  player: {
+    size: 56,
+    hitboxRatio: 0.60,      // §4 — odpouštějící kruhový hitbox
+    speed: 320,             // px/s (klávesnice)
+    accelTime: 0.08,        // s — náběh na plnou rychlost
+    baseY: 690,
+    touchYMin: 620,         // úzký pás, aby dotyk neměl výhodu v manévrování
+    touchYMax: 700,
+    invulnFrames: 90        // 1,5 s
+  },
+
+  fire: { intervalFrames: 30 },              // 1 výstřel / 500 ms
+  projectile: { w: 11, h: 24, speed: 640 },
+
+  difficulty: {
+    rampFrames: 240 * 60,                    // ~4 min na základní křivku
+    tailFrames: 120 * 60,                    // za hranicí hratelnosti (§6.1)
+    spawnFrom: 1400, spawnTo: 350, spawnTail: 140,   // ms
+    speedFrom: 90,   speedTo: 260, speedTail: 470,   // px/s
+    riskShareFrom: 0.22, riskShareTo: 0.45           // podíl hrozeb beroucích život
+  },
+
+  trinket: { intervalFrom: 1900, intervalTo: 950, size: 24, speed: 130 },
+  powerup: { intervalFrames: 15 * 60, size: 48, speed: 105, waveAmp: 46, waveHz: 0.42 },
+
+  lives: { start: 3, max: 5, thresholds: [25000, 60000, 110000, 180000] },
+
+  score: {
+    threat_document: 250,
+    threat_risk: 400,
+    trinket: 100,
+    powerup_overflow: 300      // ~3× drobnost, nikdy víc než užitek z aktivace
+  },
+
+  // Bezpečnostní limity §13 — nepřekračovat.
+  a11y: { maxPulseHz: 2.0, maxPulseAmp: 0.20, fadeOutFrames: 12 }
+};
+
+/* Odložené funkce (§7, §8, §9) — struktury existují už teď, aby se
+   nemusely doplňovat zpětně. V prototypu se používá jen podmnožina. */
+
+const MODES = {
+  calm:   { id:'calm',   label:'Klidný', lives: Infinity, timeLimitFrames: 180*60, speedMul:0.6, sizeMul:1.3, enabled:false },
+  normal: { id:'normal', label:'Běžný',  lives: 3,        timeLimitFrames: 0,      speedMul:1.0, sizeMul:1.0, enabled:true  },
+  hard:   { id:'hard',   label:'Náročný',lives: 2,        timeLimitFrames: 0,      speedMul:1.15,sizeMul:1.0, enabled:false }
+};
+
+const THREAT_TYPES = {
+  document: {
+    id:'document', category:'dokumenty', shape:'rect', w:44, h:56,
+    aura:'#6d7fb8', fill:'#2b2140', stroke:'#8f7fb0',
+    onPlayerHit:'debuff', debuff:'slowFire', debuffFrames: 5*60,
+    hitText:'Podáno včas.', score:'threat_document', enabled:true
+  },
+  risk: {
+    id:'risk', category:'rizika', shape:'triangle', w:52, h:48,
+    aura:'#d99a5b', fill:'#33243a', stroke:'#d99a5b',
+    onPlayerHit:'life',
+    hitText:'Riziko odstraněno.', score:'threat_risk', enabled:true
+  },
+  // připraveno pro v1 (§8) — enabled:false, spawner je ignoruje
+  fault:    { id:'fault',    category:'poruchy',  shape:'rect', w:48, h:48, aura:'#c25f5f', fill:'#2f2036', stroke:'#c25f5f', onPlayerHit:'life',   hitText:'Opraveno.',           score:'threat_risk',     enabled:false },
+  finance:  { id:'finance',  category:'finance',  shape:'rect', w:44, h:44, aura:'#5fb0a0', fill:'#22252f', stroke:'#5fb0a0', onPlayerHit:'score',  hitText:'Uhrazeno.',           score:'threat_document', enabled:false },
+  deadline: { id:'deadline', category:'termíny',  shape:'rect', w:44, h:52, aura:'#a97fc4', fill:'#2b2140', stroke:'#a97fc4', onPlayerHit:'debuff', debuff:'slowFire', debuffFrames:5*60, hitText:'Odesláno v termínu.', score:'threat_document', enabled:false }
+};
+
+const POWERUP_TYPES = {
+  coffee: { id:'coffee', label:'Káva', effect:'slowTime', durationFrames: 5*60, fill:'#f0e2a8', stroke:'#fff6d8', enabled:true },
+  // v1 (§8)
+  sponsor: { id:'sponsor', label:'Sponzorský dar', effect:'fastFire',  durationFrames: 8*60,  fill:'#f0b8d8', stroke:'#ffe0f0', enabled:false },
+  tymyjan: { id:'tymyjan', label:'TyMyJán',        effect:'shield',    durationFrames:10*60,  fill:'#b8e0f0', stroke:'#e0f4ff', enabled:false },
+  team:    { id:'team',    label:'Posila týmu',    effect:'coop',      durationFrames: 4*60,  fill:'#c8f0b8', stroke:'#e8ffe0', enabled:false },
+  meeting: { id:'meeting', label:'Porada',         effect:'stopSpawn', durationFrames: 3*60,  fill:'#e0d0f0', stroke:'#f4ecff', enabled:false }
+};
+
+const ACTION = { MOVE:1, ACTIVATE:2, TARGET_X:3, PAUSE:4 };
+
+/* ------------------------------- Náhoda --------------------------------- */
+/* Vlastní seedovaný PRNG. Math.random() se v celém souboru nepoužívá —
+   bez toho nelze později ověřit skóre přehráním záznamu vstupů (§2, §7). */
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function makeSeed() {
+  // Jediné místo, kde se sahá po nedeterministickém zdroji: volba seedu.
+  const buf = new Uint32Array(1);
+  if (self.crypto && self.crypto.getRandomValues) self.crypto.getRandomValues(buf);
+  else buf[0] = (Date.now() ^ (performance.now() * 1000)) >>> 0;
+  return buf[0] >>> 0;
+}
+
+/* -------------------------------- Zvuk ---------------------------------- */
+/* §15.3 — v prototypu prázdná abstrakce, aby se volání nemusela dohledávat
+   zpětně. Nikdy nesmí házet výjimku ani blokovat herní smyčku (§14.3). */
+
+const audio = {
+  enabled: false,
+  play(name) { /* no-op v prototypu */ },
+  setMuted(v) { this.enabled = !v; }
+};
+
+/* ------------------------------- Pomocné -------------------------------- */
+
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    this.moveTo(x + rr, y);
+    this.arcTo(x + w, y, x + w, y + h, rr);
+    this.arcTo(x + w, y + h, x, y + h, rr);
+    this.arcTo(x, y + h, x, y, rr);
+    this.arcTo(x, y, x + w, y, rr);
+    this.closePath();
+    return this;
+  };
+}
+
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* -------------------------------- Vstup --------------------------------- */
+/* §3 — herní logika čte výhradně pole níže. Nikdy nesahá na události. */
+
+const input = {
+  targetX: CONFIG.W / 2,   // kam hráč míří (dotyk: přímo; klávesnice: přes osu)
+  targetY: null,           // jen dotyk (§3.2, 60 px nad prstem); null = základní Y
+  axis: 0,                 // -1 / 0 / +1 (klávesnice)
+  activatePressed: false,  // hrana, konzumuje ji logika
+  pausePressed: false,
+  restartPressed: false,
+  method: null             // 'keyboard' | 'touch' — první použitý vstup rozhoduje
+};
+
+function initInput(canvas) {
+  const keys = new Set();
+
+  function toLogical(clientX, clientY) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: clamp((clientX - r.left) / r.width * CONFIG.W, 0, CONFIG.W),
+      y: clamp((clientY - r.top) / r.height * CONFIG.H, 0, CONFIG.H)
+    };
+  }
+
+  /* --- klávesnice --- */
+  addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (['arrowleft','arrowright','a','d',' ','p','escape','enter'].includes(k)) e.preventDefault();
+    if (keys.has(k)) return;
+    keys.add(k);
+    if (!input.method) input.method = 'keyboard';
+    if (k === ' ')      input.activatePressed = true;
+    if (k === 'p' || k === 'escape') input.pausePressed = true;
+    if (k === 'enter')  input.restartPressed = true;
+    updateAxis();
+  });
+  addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); updateAxis(); });
+
+  function updateAxis() {
+    const l = keys.has('arrowleft') || keys.has('a');
+    const r = keys.has('arrowright') || keys.has('d');
+    input.axis = (r ? 1 : 0) - (l ? 1 : 0);
+    if (input.axis !== 0) input.targetY = null;   // zpět na základní Y
+  }
+
+  /* --- dotyk --- */
+  let touchId = null, tStartMs = 0, tStartX = 0, tStartY = 0, moved = 0;
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (touchId !== null) return;
+    const t = e.changedTouches[0];
+    touchId = t.identifier;
+    if (!input.method) input.method = 'touch';
+    const p = toLogical(t.clientX, t.clientY);
+    // Tap na ikonu pauzy (pravý horní roh, cíl 56×56)
+    if (p.x > CONFIG.W - 64 && p.y < 64) { input.pausePressed = true; touchId = null; return; }
+    tStartMs = performance.now(); tStartX = p.x; tStartY = p.y; moved = 0;
+    applyTouch(p);
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier !== touchId) continue;
+      const p = toLogical(t.clientX, t.clientY);
+      moved = Math.max(moved, Math.hypot(p.x - tStartX, p.y - tStartY));
+      applyTouch(p);
+    }
+  }, { passive: false });
+
+  function endTouch(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier !== touchId) continue;
+      const dt = performance.now() - tStartMs;
+      // Krátký tap bez pohybu = aktivace / restart (§3.2)
+      if (dt < 200 && moved < 10) {
+        input.activatePressed = true;
+        input.restartPressed = true;
+      }
+      touchId = null;
+    }
+  }
+  canvas.addEventListener('touchend', endTouch, { passive: false });
+  canvas.addEventListener('touchcancel', endTouch, { passive: false });
+
+  function applyTouch(p) {
+    input.axis = 0;
+    input.targetX = p.x;
+    // Hráč ~60 px nad bodem dotyku, jinak ho prst zakrývá (§3.2).
+    // Svislý rozsah je záměrně úzký, aby dotyk nezískal manévrovací výhodu.
+    input.targetY = clamp(p.y - 60, CONFIG.player.touchYMin, CONFIG.player.touchYMax);
+  }
+
+  /* --- ztráta fokusu → pauza (§3.2) --- */
+  addEventListener('blur', () => { game.wantPause = true; });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) game.wantPause = true; });
+}
+
+/* ------------------------------ Stav hry -------------------------------- */
+/* Jediný objekt, žádné roztroušené globály (§2). */
+
+let game = null;
+
+function newGame(modeId) {
+  const mode = MODES[modeId] || MODES.normal;
+  const seed = makeSeed();
+  return {
+    // identita běhu
+    seed, rng: mulberry32(seed), mode: mode.id, rulesVersion: CONFIG.rulesVersion,
+    startedAt: new Date().toISOString(),
+
+    // běh
+    state: 'playing',            // playing | paused | over
+    frame: 0,
+    wantPause: false,
+
+    // hráč
+    player: {
+      x: CONFIG.W / 2, y: CONFIG.player.baseY, vx: 0,
+      lives: mode.lives, invulnFrames: 0, alive: true
+    },
+
+    // skóre
+    score: 0,
+    nextLifeIdx: 0,
+    scoreLog: [],                // {frame, amount, reason} — kontrola balancování
+
+    // sloty a efekty
+    slot: null,                  // uložená posila (id typu)
+    activeEffect: null,          // {effect, framesLeft}
+    debuff: null,                // {kind, framesLeft}
+
+    // entity
+    projectiles: [], threats: [], powerups: [], trinkets: [], fx: [], floaters: [],
+
+    // časovače spawnu (ve snímcích)
+    tThreat: 60, tTrinket: 90, tPowerup: CONFIG.powerup.intervalFrames,
+    tFire: 0,
+
+    // záznam vstupů (§7)
+    inputLog: [], lastLoggedAxis: 0, lastLoggedX: -1,
+
+    lastRun: null
+  };
+}
+
+/* ------------------------------- Skóre ---------------------------------- */
+/* §7 — jediné místo, kde se mění skóre. */
+
+function addScore(amount, reason) {
+  if (amount === 0) return;
+  game.score = Math.max(0, game.score + amount);
+  game.scoreLog.push({ frame: game.frame, amount, reason });
+
+  const th = CONFIG.lives.thresholds;
+  while (game.nextLifeIdx < th.length && game.score >= th[game.nextLifeIdx]) {
+    game.nextLifeIdx++;
+    if (game.player.lives < CONFIG.lives.max) {
+      game.player.lives++;
+      audio.play('extraLife');
+      pushFloater(game.player.x, game.player.y - 50, 'Nový život', '#f2a8c8');
+    }
+  }
+}
+
+/* ------------------------------ Obtížnost ------------------------------- */
+
+function difficulty() {
+  const d = CONFIG.difficulty;
+  const t01 = clamp(game.frame / d.rampFrames, 0, 1);
+  const tail = clamp((game.frame - d.rampFrames) / d.tailFrames, 0, 1);
+  const mode = MODES[game.mode];
+  return {
+    spawnFrames: lerp(lerp(d.spawnFrom, d.spawnTo, t01), d.spawnTail, tail) / 1000 * CONFIG.FPS,
+    fallSpeed: lerp(lerp(d.speedFrom, d.speedTo, t01), d.speedTail, tail) * mode.speedMul,
+    riskShare: lerp(d.riskShareFrom, d.riskShareTo, t01),
+    trinketFrames: lerp(CONFIG.trinket.intervalFrom, CONFIG.trinket.intervalTo, t01) / 1000 * CONFIG.FPS
+  };
+}
+
+/* ------------------------------- Spawn ---------------------------------- */
+
+const ENABLED_THREATS = Object.values(THREAT_TYPES).filter(t => t.enabled);
+const ENABLED_POWERUPS = Object.values(POWERUP_TYPES).filter(p => p.enabled);
+
+function spawnThreat(diff) {
+  const wantRisk = game.rng() < diff.riskShare;
+  const pool = ENABLED_THREATS.filter(t => (t.onPlayerHit === 'life') === wantRisk);
+  const type = (pool.length ? pool : ENABLED_THREATS)[0];
+  const w = type.w * MODES[game.mode].sizeMul;
+  game.threats.push({
+    type, x: lerp(w, CONFIG.W - w, game.rng()), y: -40,
+    w, h: type.h * MODES[game.mode].sizeMul,
+    r: Math.max(w, type.h) * 0.42,
+    vy: diff.fallSpeed * lerp(0.9, 1.1, game.rng()),
+    rot: game.rng() * Math.PI * 2,
+    rotSpeed: lerp(-1.1, 1.1, game.rng()),
+    dying: 0
+  });
+}
+
+function spawnPowerup() {
+  const type = ENABLED_POWERUPS[Math.floor(game.rng() * ENABLED_POWERUPS.length)];
+  const x = lerp(70, CONFIG.W - 70, game.rng());
+  game.powerups.push({
+    type, x, baseX: x, y: -40, r: CONFIG.powerup.size / 2,
+    vy: CONFIG.powerup.speed, phase: game.rng() * Math.PI * 2, dying: 0
+  });
+}
+
+function spawnTrinket() {
+  game.trinkets.push({
+    x: lerp(40, CONFIG.W - 40, game.rng()), y: -30, r: CONFIG.trinket.size / 2,
+    vy: CONFIG.trinket.speed * lerp(0.9, 1.15, game.rng()),
+    phase: game.rng() * Math.PI * 2, dying: 0
+  });
+}
+
+/* ------------------------------ Efekty ---------------------------------- */
+
+function timeScale() {
+  return (game.activeEffect && game.activeEffect.effect === 'slowTime') ? 0.5 : 1;
+}
+function fireIntervalFrames() {
+  let f = CONFIG.fire.intervalFrames;
+  if (game.debuff && game.debuff.kind === 'slowFire') f *= 2;
+  if (game.activeEffect && game.activeEffect.effect === 'fastFire') f *= 0.55;
+  return f;
+}
+function activateSlot() {
+  if (!game.slot) return;
+  const type = POWERUP_TYPES[game.slot];
+  game.activeEffect = { effect: type.effect, framesLeft: type.durationFrames };
+  game.slot = null;
+  audio.play('powerupActivate');
+  pushFloater(game.player.x, game.player.y - 46, type.label, '#fff6d8');
+}
+
+/* ------------------------- Vizuální drobnosti --------------------------- */
+
+function pushFloater(x, y, text, color) {
+  game.floaters.push({ x, y, text, color, life: 54, max: 54 });
+}
+function pushFade(x, y, r, kind, color) {
+  // Zánik objektu: plynulé zmenšení a vyblednutí ~200 ms, ne exploze (§13.2)
+  game.fx.push({ x, y, r, kind, color, life: CONFIG.a11y.fadeOutFrames, max: CONFIG.a11y.fadeOutFrames });
+}
+
+/* ------------------------------ Kolize ---------------------------------- */
+
+const hitR = CONFIG.player.size * CONFIG.player.hitboxRatio / 2;
+function circleHit(ax, ay, ar, bx, by, br) {
+  const dx = ax - bx, dy = ay - by, rr = ar + br;
+  return dx * dx + dy * dy <= rr * rr;
+}
+
+function playerTakesHit(threat) {
+  const p = game.player;
+  if (p.invulnFrames > 0) return;
+
+  if (game.activeEffect && game.activeEffect.effect === 'shield') {
+    game.activeEffect = null;
+    p.invulnFrames = CONFIG.player.invulnFrames;
+    audio.play('playerHit');
+    return;
+  }
+
+  const kind = threat.type.onPlayerHit;
+  if (kind === 'debuff') {
+    game.debuff = { kind: threat.type.debuff, framesLeft: threat.type.debuffFrames };
+    p.invulnFrames = CONFIG.player.invulnFrames;
+    audio.play('playerHit');
+    pushFloater(p.x, p.y - 46, 'Papírování…', '#8f7fb0');
+  } else if (kind === 'score') {
+    addScore(-500, 'threat_finance_hit');
+    p.invulnFrames = CONFIG.player.invulnFrames;
+    audio.play('playerHit');
+  } else {
+    if (p.lives !== Infinity) p.lives--;
+    p.invulnFrames = CONFIG.player.invulnFrames;
+    audio.play('playerHit');
+    pushFloater(p.x, p.y - 46, 'Ztráta života', '#d99a5b');
+    if (p.lives <= 0) endRun();
+  }
+}
+
+/* ------------------------------ Konec běhu ------------------------------ */
+
+function endRun() {
+  game.state = 'over';
+  game.player.alive = false;
+  audio.play('gameOver');
+
+  // Výsledek běhu jako objekt, ne číslo (§7)
+  const run = {
+    score: game.score,
+    mode: game.mode,
+    inputMethod: input.method || 'keyboard',
+    durationFrames: game.frame,
+    seed: game.seed,
+    rulesVersion: game.rulesVersion,
+    inputLog: game.inputLog,
+    timestamp: new Date().toISOString()
+  };
+  game.lastRun = run;
+  storeRun(run);
+  console.log('[Mateřídouška] výsledek běhu:', run);
+}
+
+/* Lokální historie běhů — kvůli kritériu §10/4 (rozdíl dotyk vs. klávesnice).
+   Ukládá se bez inputLog, aby localStorage nepřetekl. */
+function storeRun(run) {
+  try {
+    const { inputLog, ...meta } = run;
+    const all = JSON.parse(localStorage.getItem('md_runs') || '[]');
+    all.push(meta);
+    localStorage.setItem('md_runs', JSON.stringify(all.slice(-200)));
+  } catch (e) { /* soukromý režim apod. — hra běží dál */ }
+}
+function bestScore(method) {
+  try {
+    const all = JSON.parse(localStorage.getItem('md_runs') || '[]');
+    return all.filter(r => r.inputMethod === method && r.mode === game.mode)
+              .reduce((m, r) => Math.max(m, r.score), 0);
+  } catch (e) { return 0; }
+}
+window.mdRuns = () => JSON.parse(localStorage.getItem('md_runs') || '[]');
+window.mdReset = () => localStorage.removeItem('md_runs');
+
+/* ------------------------------ Záznam vstupů --------------------------- */
+
+function logInput() {
+  if (input.method === 'touch') {
+    const x = Math.round(input.targetX);
+    if (x !== game.lastLoggedX) { game.inputLog.push([game.frame, ACTION.TARGET_X, x]); game.lastLoggedX = x; }
+  } else {
+    if (input.axis !== game.lastLoggedAxis) { game.inputLog.push([game.frame, ACTION.MOVE, input.axis]); game.lastLoggedAxis = input.axis; }
+  }
+}
+
+/* ------------------------------ Aktualizace ----------------------------- */
+
+function update() {
+  /* --- pauza / restart --- */
+  if (input.pausePressed || game.wantPause) {
+    input.pausePressed = false; game.wantPause = false;
+    if (game.state === 'playing') game.state = 'paused';
+    else if (game.state === 'paused') game.state = 'playing';
+  }
+  if (game.state === 'over') {
+    if (input.restartPressed) { const m = game.mode; game = newGame(m); }
+    input.restartPressed = false; input.activatePressed = false;
+    return;
+  }
+  input.restartPressed = false;
+  if (game.state === 'paused') { input.activatePressed = false; return; }
+
+  const dt = CONFIG.DT;
+  const ts = timeScale();
+  const diff = difficulty();
+  const p = game.player;
+
+  logInput();
+
+  /* --- hráč --- */
+  if (input.method === 'touch' && input.targetY !== null) {
+    // přímé pozicování
+    p.x = input.targetX;
+    p.y += (input.targetY - p.y) * 0.5;
+    p.vx = 0;
+  } else {
+    const target = input.axis * CONFIG.player.speed;
+    const k = 1 - Math.exp(-dt / CONFIG.player.accelTime);   // náběh ~80 ms
+    p.vx += (target - p.vx) * k;
+    p.x += p.vx * dt;
+    p.y += (CONFIG.player.baseY - p.y) * 0.2;
+  }
+  const half = CONFIG.player.size / 2;
+  p.x = clamp(p.x, half, CONFIG.W - half);
+  if (p.invulnFrames > 0) p.invulnFrames--;
+
+  /* --- aktivace posily --- */
+  if (input.activatePressed) {
+    input.activatePressed = false;
+    game.inputLog.push([game.frame, ACTION.ACTIVATE]);
+    activateSlot();
+  }
+
+  /* --- efekty --- */
+  if (game.activeEffect && --game.activeEffect.framesLeft <= 0) game.activeEffect = null;
+  if (game.debuff && --game.debuff.framesLeft <= 0) game.debuff = null;
+
+  /* --- střelba (automatická, §3.4) --- */
+  if (--game.tFire <= 0) {
+    game.tFire = fireIntervalFrames();
+    game.projectiles.push({ x: p.x, y: p.y - 30 });
+    audio.play('shot');
+  }
+  for (const pr of game.projectiles) pr.y -= CONFIG.projectile.speed * dt;
+
+  /* --- spawn --- */
+  const spawnStopped = game.activeEffect && game.activeEffect.effect === 'stopSpawn';
+  if (!spawnStopped) {
+    if (--game.tThreat <= 0)  { game.tThreat = diff.spawnFrames; spawnThreat(diff); }
+    if (--game.tTrinket <= 0) { game.tTrinket = diff.trinketFrames; spawnTrinket(); }
+    if (--game.tPowerup <= 0) { game.tPowerup = CONFIG.powerup.intervalFrames; spawnPowerup(); }
+  }
+
+  /* --- hrozby --- */
+  for (const t of game.threats) {
+    if (t.dying) { t.dying--; continue; }
+    t.y += t.vy * dt * ts;
+    t.rot += t.rotSpeed * dt * ts;
+
+    if (p.invulnFrames === 0 && circleHit(p.x, p.y, hitR, t.x, t.y, t.r * 0.9)) {
+      playerTakesHit(t);
+      t.dying = 1;
+      pushFade(t.x, t.y, t.r, 'threat', t.type.aura);
+    }
+  }
+
+  /* --- projektily vs. hrozby (posily a drobnosti se nedají sestřelit, §5.2/5.3) --- */
+  for (const pr of game.projectiles) {
+    if (pr.dead) continue;
+    for (const t of game.threats) {
+      if (t.dying) continue;
+      if (circleHit(pr.x, pr.y - CONFIG.projectile.h / 2, 6, t.x, t.y, t.r)) {
+        pr.dead = true;
+        t.dying = 1;
+        addScore(CONFIG.score[t.type.score], 'kill_' + t.type.id);
+        pushFade(t.x, t.y, t.r, 'threat', t.type.aura);
+        pushFloater(t.x, t.y - 10, t.type.hitText, '#9fd08a');
+        audio.play('threatHit');
+        break;
+      }
+    }
+  }
+
+  /* --- posily --- */
+  for (const pw of game.powerups) {
+    if (pw.dying) continue;
+    pw.y += pw.vy * dt * ts;
+    pw.phase += CONFIG.powerup.waveHz * 2 * Math.PI * dt * ts;
+    pw.x = clamp(pw.baseX + Math.sin(pw.phase) * CONFIG.powerup.waveAmp, pw.r, CONFIG.W - pw.r);
+
+    if (circleHit(p.x, p.y, hitR, pw.x, pw.y, pw.r)) {
+      pw.dying = 1;
+      pushFade(pw.x, pw.y, pw.r, 'round', pw.type.fill);
+      if (game.slot === null) {
+        game.slot = pw.type.id;
+        audio.play('powerupPickup');
+        pushFloater(pw.x, pw.y - 20, pw.type.label + ' → slot', '#fff6d8');
+      } else {
+        addScore(CONFIG.score.powerup_overflow, 'powerup_overflow');
+        pushFloater(pw.x, pw.y - 20, '+' + CONFIG.score.powerup_overflow, '#fff6d8');
+      }
+    }
+  }
+
+  /* --- drobnosti --- */
+  for (const tr of game.trinkets) {
+    if (tr.dying) continue;
+    tr.y += tr.vy * dt * ts;
+    if (circleHit(p.x, p.y, hitR, tr.x, tr.y, tr.r)) {
+      tr.dying = 1;
+      addScore(CONFIG.score.trinket, 'trinket');
+      pushFade(tr.x, tr.y, tr.r, 'round', '#f2a8c8');
+      audio.play('trinket');
+    }
+  }
+
+  /* --- dohasínání a úklid --- */
+  for (const f of game.fx) f.life--;
+  for (const f of game.floaters) { f.life--; f.y -= 22 * dt; }
+
+  game.fx = game.fx.filter(f => f.life > 0);
+  game.floaters = game.floaters.filter(f => f.life > 0);
+  game.projectiles = game.projectiles.filter(pr => !pr.dead && pr.y > -40);
+  game.threats = game.threats.filter(t => !t.dying && t.y < CONFIG.H + 60);
+  game.powerups = game.powerups.filter(pw => !pw.dying && pw.y < CONFIG.H + 60);
+  game.trinkets = game.trinkets.filter(tr => !tr.dying && tr.y < CONFIG.H + 60);
+
+  game.frame++;
+
+  const limit = MODES[game.mode].timeLimitFrames;
+  if (limit && game.frame >= limit) endRun();
+}
+
+/* ------------------------------ Vykreslení ------------------------------ */
+
+const C = {
+  bg: '#160d20', bgFar: '#1c1129',
+  hud: '#e8dcf2', hudDim: '#9b8bab',
+  player: '#e05fa8', playerInner: '#f7c9e4', playerLine: '#ffd9ee',
+  leaf: '#b7c94a', leafLine: '#e6f08f'
+};
+
+let ctx = null;
+
+/* Pulz: max 2 cykly/s, amplituda jasu max ±20 % (§13.2). */
+function pulse01(frame, hz) {
+  return 0.5 + 0.5 * Math.sin(frame / CONFIG.FPS * 2 * Math.PI * Math.min(hz, CONFIG.a11y.maxPulseHz));
+}
+
+function draw() {
+  const W = CONFIG.W, H = CONFIG.H;
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // statické pozadí — žádná animace jasu (§13.2)
+  ctx.fillStyle = C.bgFar;
+  ctx.fillRect(0, 0, W, 96);
+
+  drawTrinkets();
+  drawPowerups();
+  drawThreats();
+  drawProjectiles();
+  if (game.player.alive) drawPlayer();
+  drawFx();
+  drawFloaters();
+  drawHud();
+
+  if (game.state === 'paused') drawOverlay('Pauza', [
+    input.method === 'touch' ? 'Tap na ikonu pauzy — pokračovat' : 'P / Esc — pokračovat'
+  ]);
+  if (game.state === 'over') drawGameOver();
+}
+
+function drawPlayer() {
+  const p = game.player, s = CONFIG.player.size;
+  let alpha = 1;
+  if (p.invulnFrames > 0) {
+    // plynulé prolínání 2 cykly/s, nikdy ostré blikání (§4, §13.3)
+    alpha = 0.4 + 0.6 * pulse01(game.frame, 2);
+  }
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(p.x, p.y);
+
+  // vnější silueta (květ jako zaoblený čtverec s laloky) — v prototypu tvar
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI / 2 + i * Math.PI * 2 / 5;
+    ctx.ellipse(Math.cos(a) * s * 0.24, Math.sin(a) * s * 0.24, s * 0.26, s * 0.26, 0, 0, Math.PI * 2);
+  }
+  ctx.fillStyle = C.player;
+  ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.playerLine; ctx.stroke();
+
+  // světlý střed — při 56 px musí zůstat čitelný (§11.3)
+  ctx.beginPath();
+  ctx.arc(0, 0, s * 0.17, 0, Math.PI * 2);
+  ctx.fillStyle = C.playerInner; ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = C.playerLine; ctx.stroke();
+
+  if (game.activeEffect && game.activeEffect.effect === 'shield') {
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.62, 0, Math.PI * 2);
+    ctx.strokeStyle = '#b8e0f0'; ctx.lineWidth = 3; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawProjectiles() {
+  const w = CONFIG.projectile.w, h = CONFIG.projectile.h;
+  ctx.lineWidth = 2.5; ctx.strokeStyle = C.leafLine; ctx.fillStyle = C.leaf;
+  for (const pr of game.projectiles) {
+    ctx.beginPath();
+    ctx.ellipse(pr.x, pr.y - h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+  }
+}
+
+function drawThreats() {
+  for (const t of game.threats) {
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.rotate(t.rot);
+    ctx.lineWidth = 3; ctx.strokeStyle = t.type.stroke; ctx.fillStyle = t.type.fill;
+
+    if (t.type.shape === 'triangle') {
+      const w = t.w, h = t.h;
+      ctx.beginPath();
+      ctx.moveTo(0, -h / 2); ctx.lineTo(w / 2, h / 2); ctx.lineTo(-w / 2, h / 2); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      // vykřičník — informace nesená tvarem, ne barvou (§11.1)
+      ctx.fillStyle = t.type.stroke;
+      ctx.fillRect(-2.5, -h * 0.12, 5, h * 0.34);
+      ctx.fillRect(-2.5, h * 0.30, 5, 5);
+    } else {
+      ctx.beginPath();
+      ctx.rect(-t.w / 2, -t.h / 2, t.w, t.h);
+      ctx.fill(); ctx.stroke();
+      // linky textu na dokumentu
+      ctx.strokeStyle = t.type.aura; ctx.lineWidth = 2;
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.moveTo(-t.w * 0.28, i * t.h * 0.18);
+        ctx.lineTo(t.w * 0.28, i * t.h * 0.18);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+}
+
+function drawPowerups() {
+  for (const pw of game.powerups) {
+    // pulz max 2 cykly/s, ±20 % jasu, plynule (§13.2)
+    const k = pulse01(game.frame + pw.phase * 20, 1.6);
+    const glowA = 0.10 + 0.06 * k;
+    const scale = 1 + 0.05 * k;
+
+    ctx.save();
+    ctx.translate(pw.x, pw.y);
+    ctx.globalAlpha = glowA;
+    ctx.beginPath(); ctx.arc(0, 0, pw.r * 1.7, 0, Math.PI * 2);
+    ctx.fillStyle = pw.type.fill; ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.beginPath(); ctx.arc(0, 0, pw.r * scale, 0, Math.PI * 2);
+    ctx.fillStyle = pw.type.fill; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = pw.type.stroke; ctx.stroke();
+
+    // hrneček — kulatá, měkká silueta
+    ctx.strokeStyle = '#5a4326'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 2, pw.r * 0.45, Math.PI * 0.05, Math.PI * 0.95); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-pw.r * 0.45, 2); ctx.lineTo(pw.r * 0.45, 2); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawTrinkets() {
+  for (const tr of game.trinkets) {
+    const k = pulse01(game.frame + tr.phase * 20, 0.8);   // pomalé prolnutí (§13.3)
+    ctx.save();
+    ctx.translate(tr.x, tr.y);
+    ctx.beginPath(); ctx.arc(0, 0, tr.r, 0, Math.PI * 2);
+    ctx.fillStyle = '#f2a8c8'; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#ffd9ea'; ctx.stroke();
+    // 2 statické body s pomalým prolnutím, ne částice
+    ctx.globalAlpha = 0.45 + 0.35 * k;
+    ctx.fillStyle = '#fff2f8';
+    ctx.fillRect(-tr.r * 0.45, -tr.r * 0.45, 3, 3);
+    ctx.fillRect(tr.r * 0.25, tr.r * 0.15, 3, 3);
+    ctx.restore();
+  }
+}
+
+function drawFx() {
+  for (const f of game.fx) {
+    const t = f.life / f.max;              // 1 → 0
+    ctx.save();
+    ctx.globalAlpha = t * 0.8;
+    ctx.translate(f.x, f.y);
+    ctx.scale(0.6 + 0.4 * t, 0.6 + 0.4 * t);
+    ctx.beginPath();
+    ctx.arc(0, 0, f.r, 0, Math.PI * 2);
+    ctx.lineWidth = 3; ctx.strokeStyle = f.color; ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawFloaters() {
+  ctx.textAlign = 'center';
+  ctx.font = '600 17px "Segoe UI", system-ui, sans-serif';
+  for (const f of game.floaters) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, f.life / (f.max * 0.5));
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, clamp(f.x, 70, CONFIG.W - 70), f.y);
+    ctx.restore();
+  }
+  ctx.textAlign = 'left';
+}
+
+function drawHud() {
+  ctx.font = '700 26px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = C.hud;
+  ctx.fillText(String(game.score), 18, 40);
+
+  ctx.font = '600 13px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = C.hudDim;
+  ctx.fillText('skóre', 18, 60);
+
+  // životy — tvarem, ne jen barvou
+  for (let i = 0; i < Math.min(game.player.lives === Infinity ? 0 : game.player.lives, CONFIG.lives.max); i++) {
+    ctx.beginPath();
+    ctx.arc(24 + i * 26, 82, 8, 0, Math.PI * 2);
+    ctx.fillStyle = C.player; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = C.playerLine; ctx.stroke();
+  }
+
+  // slot posily
+  ctx.save();
+  ctx.translate(CONFIG.W / 2, 42);
+  ctx.lineWidth = 2; ctx.strokeStyle = '#4a3560';
+  ctx.beginPath(); ctx.roundRect(-30, -26, 60, 52, 10); ctx.stroke();
+  if (game.slot) {
+    const type = POWERUP_TYPES[game.slot];
+    ctx.beginPath(); ctx.arc(0, -2, 15, 0, Math.PI * 2);
+    ctx.fillStyle = type.fill; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = type.stroke; ctx.stroke();
+    ctx.font = '600 10px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = C.hudDim; ctx.textAlign = 'center';
+    ctx.fillText(input.method === 'touch' ? 'tap' : 'mezerník', 0, 22);
+    ctx.textAlign = 'left';
+  }
+  ctx.restore();
+
+  // debuff / aktivní efekt
+  if (game.debuff) {
+    ctx.font = '600 14px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = '#8f7fb0'; ctx.textAlign = 'right';
+    ctx.fillText('zpomalená střelba ' + Math.ceil(game.debuff.framesLeft / 60) + ' s', CONFIG.W - 18, 100);
+    ctx.textAlign = 'left';
+  }
+  if (game.activeEffect) {
+    ctx.font = '600 14px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = '#fff6d8'; ctx.textAlign = 'right';
+    ctx.fillText(POWERUP_TYPES[
+      Object.keys(POWERUP_TYPES).find(k => POWERUP_TYPES[k].effect === game.activeEffect.effect)
+    ].label + ' ' + Math.ceil(game.activeEffect.framesLeft / 60) + ' s', CONFIG.W - 18, 122);
+    ctx.textAlign = 'left';
+  }
+
+  // ikona pauzy — dotykový cíl 56×56 (§15.2)
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = C.hudDim;
+  ctx.fillRect(CONFIG.W - 42, 26, 6, 22);
+  ctx.fillRect(CONFIG.W - 30, 26, 6, 22);
+  ctx.restore();
+}
+
+function drawOverlay(title, lines) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(13,7,20,0.86)';
+  ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = C.hud;
+  ctx.font = '700 40px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(title, CONFIG.W / 2, 300);
+  ctx.font = '500 18px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = C.hudDim;
+  lines.forEach((l, i) => ctx.fillText(l, CONFIG.W / 2, 350 + i * 30));
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
+function drawGameOver() {
+  const r = game.lastRun;
+  const method = r.inputMethod === 'touch' ? 'dotyk' : 'klávesnice';
+  const best = bestScore(r.inputMethod);
+  drawOverlay('Konec hry', [
+    'režim: ' + MODES[r.mode].label + ' · ovládání: ' + method,
+    'čas: ' + (r.durationFrames / 60).toFixed(1) + ' s',
+    'nejlepší (' + method + '): ' + best,
+    '',
+    input.method === 'touch' ? 'Tap — hrát znovu' : 'Enter — hrát znovu'
+  ]);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = C.player;
+  ctx.font = '700 66px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(String(r.score), CONFIG.W / 2, 240);
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
+/* ------------------------------ Smyčka ---------------------------------- */
+/* Pevný krok 60 Hz s akumulátorem, render oddělený od logiky (§2). */
+
+function main() {
+  const canvas = document.getElementById('c');
+  ctx = canvas.getContext('2d', { alpha: false });
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const stage = document.getElementById('stage');
+    const scale = Math.min(stage.clientWidth / CONFIG.W, stage.clientHeight / CONFIG.H);
+    canvas.style.width = (CONFIG.W * scale) + 'px';
+    canvas.style.height = (CONFIG.H * scale) + 'px';
+    canvas.width = Math.round(CONFIG.W * scale * dpr);
+    canvas.height = Math.round(CONFIG.H * scale * dpr);
+    ctx.setTransform(canvas.width / CONFIG.W, 0, 0, canvas.height / CONFIG.H, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+  }
+  addEventListener('resize', resize);
+  addEventListener('orientationchange', resize);
+
+  game = newGame('normal');
+  initInput(canvas);
+  resize();
+
+  let last = performance.now(), acc = 0;
+  const step = 1000 / CONFIG.FPS;
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    let delta = now - last;
+    last = now;
+    if (delta > 250) delta = step;          // po pauze/přepnutí tabu nedohánět
+    acc += delta;
+    let guard = 0;
+    while (acc >= step && guard++ < 5) { update(); acc -= step; }
+    draw();
+  }
+  requestAnimationFrame(frame);
+}
+
+main();
+</script>
+</body>
+</html>
