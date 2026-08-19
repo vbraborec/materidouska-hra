@@ -76,7 +76,7 @@ const CONFIG = {
   W: 600, H: 800,
   FPS: 60,
   DT: 1 / 60,
-  rulesVersion: 1,
+  rulesVersion: 2,
 
   player: {
     size: 56,
@@ -89,27 +89,43 @@ const CONFIG = {
     invulnFrames: 90        // 1,5 s
   },
 
-  fire: { intervalFrames: 30 },              // 1 výstřel / 500 ms
+  // Kadence: specifikace navrhovala 500 ms; po prvním hraní zpomaleno —
+  // při 500 ms si pasivní hráč vystačil se stáním na místě.
+  fire: { intervalFrames: 37 },              // ~620 ms
   projectile: { w: 11, h: 24, speed: 640 },
 
+  // Křivka po prvním hraní přiostřena. Specifikace navrhovala 1400→350 ms
+  // za ~4 min; při tom vydržel i hráč, který jen stál a střílel, přes 3 min.
+  // Hustota spawnu je hlavní páka (§6.1) — teprve když je objektů víc, než
+  // stačí jeden sloupec palby vyčistit, přestane pasivní hraní fungovat.
   difficulty: {
-    rampFrames: 240 * 60,                    // ~4 min na základní křivku
+    rampFrames: 110 * 60,                    // ~1:50 na základní křivku
     tailFrames: 120 * 60,                    // za hranicí hratelnosti (§6.1)
-    spawnFrom: 1400, spawnTo: 350, spawnTail: 140,   // ms
-    speedFrom: 90,   speedTo: 260, speedTail: 470,   // px/s
-    riskShareFrom: 0.22, riskShareTo: 0.45           // podíl hrozeb beroucích život
+    spawnFrom: 1000, spawnTo: 200, spawnTail: 120,   // ms
+    speedFrom: 90,   speedTo: 320, speedTail: 480,   // px/s
+    riskShareFrom: 0.22, riskShareTo: 0.45,          // podíl hrozeb beroucích život
+    driftFrom: 70, driftTo: 165                      // px/s — rozsah bočního úhybu rizik
   },
+
+  // Trhavý pohyb rizik: náhodné změny směru. Záměrně NE sinus — plynulé
+  // vlnění je vyhrazené posilám (§5.4) a hrozba by s nimi splývala.
+  // wanderRange drží riziko v okolí sloupce, kde vzniklo — bez něj odpluje
+  // ke stěně a hustota hrozeb uprostřed klesne, tedy hra se paradoxně zlehčí.
+  erratic: { turnMinFrames: 21, turnMaxFrames: 54, responsiveness: 0.11, wanderRange: 150 },
 
   trinket: { intervalFrom: 1900, intervalTo: 950, size: 24, speed: 130 },
   powerup: { intervalFrames: 15 * 60, size: 48, speed: 105, waveAmp: 46, waveHz: 0.42 },
 
   lives: { start: 3, max: 5, thresholds: [25000, 60000, 110000, 180000] },
 
+  // Hodnoty zdvojnásobené spolu s přiostřením křivky — prahy pro extra život
+  // (§6.2) zůstávají dle specifikace, ale při kratších bězích by se jich
+  // s původním bodováním nedalo dosáhnout a celý systém by zůstal neotestovaný.
   score: {
-    threat_document: 250,
-    threat_risk: 400,
-    trinket: 100,
-    powerup_overflow: 300      // ~3× drobnost, nikdy víc než užitek z aktivace
+    threat_document: 500,
+    threat_risk: 800,
+    trinket: 200,
+    powerup_overflow: 600      // ~3× drobnost, nikdy víc než užitek z aktivace
   },
 
   // Bezpečnostní limity §13 — nepřekračovat.
@@ -130,12 +146,14 @@ const THREAT_TYPES = {
     id:'document', category:'dokumenty', shape:'rect', w:44, h:56,
     aura:'#6d7fb8', fill:'#2b2140', stroke:'#8f7fb0',
     onPlayerHit:'debuff', debuff:'slowFire', debuffFrames: 5*60,
+    motion:'straight',
     hitText:'Podáno včas.', score:'threat_document', enabled:true
   },
   risk: {
     id:'risk', category:'rizika', shape:'triangle', w:52, h:48,
     aura:'#d99a5b', fill:'#33243a', stroke:'#d99a5b',
     onPlayerHit:'life',
+    motion:'erratic',
     hitText:'Riziko odstraněno.', score:'threat_risk', enabled:true
   },
   // připraveno pro v1 (§8) — enabled:false, spawner je ignoruje
@@ -383,6 +401,7 @@ function difficulty() {
     spawnFrames: lerp(lerp(d.spawnFrom, d.spawnTo, t01), d.spawnTail, tail) / 1000 * CONFIG.FPS,
     fallSpeed: lerp(lerp(d.speedFrom, d.speedTo, t01), d.speedTail, tail) * mode.speedMul,
     riskShare: lerp(d.riskShareFrom, d.riskShareTo, t01),
+    drift: lerp(d.driftFrom, d.driftTo, t01),
     trinketFrames: lerp(CONFIG.trinket.intervalFrom, CONFIG.trinket.intervalTo, t01) / 1000 * CONFIG.FPS
   };
 }
@@ -404,8 +423,22 @@ function spawnThreat(diff) {
     vy: diff.fallSpeed * lerp(0.9, 1.1, game.rng()),
     rot: game.rng() * Math.PI * 2,
     rotSpeed: lerp(-1.1, 1.1, game.rng()),
+    motion: type.motion || 'straight',
+    vx: 0, targetVx: 0, tTurn: 0, drift: diff.drift, baseX: 0,
     dying: 0
   });
+  const last = game.threats[game.threats.length - 1];
+  last.baseX = last.x;
+  if (type.motion === 'erratic') retargetDrift(last, true);
+}
+
+/* Nový náhodný boční směr rizika. Volá se při vzniku a pak v náhodných
+   intervalech — z toho vzniká trhavý, nepředvídatelný pohyb. */
+function retargetDrift(t, first) {
+  const e = CONFIG.erratic;
+  t.tTurn = lerp(e.turnMinFrames, e.turnMaxFrames, game.rng());
+  t.targetVx = lerp(-t.drift, t.drift, game.rng());
+  if (first) t.vx = t.targetVx * 0.5;
 }
 
 function spawnPowerup() {
@@ -620,6 +653,21 @@ function update() {
     if (t.dying) { t.dying--; continue; }
     t.y += t.vy * dt * ts;
     t.rot += t.rotSpeed * dt * ts;
+
+    if (t.motion === 'erratic') {
+      t.tTurn -= ts;
+      if (t.tTurn <= 0) retargetDrift(t, false);
+      // rychlý, ale ne skokový náběh — jinak objekt teleportuje do strany
+      t.vx += (t.targetVx - t.vx) * CONFIG.erratic.responsiveness * ts;
+      t.x += t.vx * dt * ts;
+      // odraz od okrajů plochy i od hranic bloudění kolem výchozího sloupce
+      const lo = Math.max(t.r, t.baseX - CONFIG.erratic.wanderRange);
+      const hi = Math.min(CONFIG.W - t.r, t.baseX + CONFIG.erratic.wanderRange);
+      if (t.x < lo) { t.x = lo; t.vx = Math.abs(t.vx); t.targetVx = Math.abs(t.targetVx); }
+      else if (t.x > hi) { t.x = hi; t.vx = -Math.abs(t.vx); t.targetVx = -Math.abs(t.targetVx); }
+      // náklon ve směru pohybu podpoří čitelnost úhybu
+      t.rot += t.vx * dt * ts * 0.004;
+    }
 
     if (p.invulnFrames === 0 && circleHit(p.x, p.y, hitR, t.x, t.y, t.r * 0.9)) {
       playerTakesHit(t);

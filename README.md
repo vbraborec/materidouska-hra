@@ -28,18 +28,26 @@ Střelba je automatická u obou vstupů.
 | Objekt | Tvar / pohyb | Efekt |
 |---|---|---|
 | dokument | obdélník, rotuje | při srážce **zpomalí střelbu na 5 s** |
-| riziko | trojúhelník s vykřičníkem, rotuje | při srážce **bere život** |
+| riziko | trojúhelník s vykřičníkem, rotuje, **uhýbá do stran** | při srážce **bere život** |
 | káva | kruh, snáší se vlnivě, pulzuje | uloží se do slotu; aktivace = zpomalení času na 5 s |
-| srdíčko | malý kruh, jiskra | okamžitě +100 bodů |
+| srdíčko | malý kruh, jiskra | okamžitě +200 bodů |
 
 Hrozby jdou sestřelit lístkem, posily a drobnosti ne — těmi projektil prolétne.
 
-### Odchylka od specifikace
+### Odchylky od specifikace
 
 §1 uvádí v prototypu jedinou hrozbu (dokument), §5.1 jí ale přiděluje debuff
 místo ztráty života. S jedinou hrozbou by hráč neměl jak přijít o život a běh
 by nikdy neskončil (proti §6.1). Prototyp proto obsahuje **dvě** hrozby —
 dokument (debuff) a riziko (život). Odstupňování zásahů tak jde otestovat.
+
+**Riziko se nepohybuje rovně.** §5.4 staví rozlišení hrozeb a posil na pohybu
+(hrozby rovně, posily vlnivě). Riziko po prvním hraní dostalo boční úhyb —
+záměrně **trhavý**, tedy náhodné změny směru s rychlým náběhem, nikoli sinus.
+Plynulé vlnění zůstává vyhrazené posilám, aby se kategorie nepletly. Bloudění
+je navíc omezené na ±150 px od sloupce, kde riziko vzniklo.
+
+**Křivka obtížnosti a bodové hodnoty jsou jiné než v §6.1.** Viz Balancování.
 
 ## Technický základ
 
@@ -98,16 +106,48 @@ doplňovat zpětně:
 - `audio.play(name)` — prázdná abstrakce, volá se na všech 9 místech
 - `rulesVersion`, `inputMethod`, `seed`, `inputLog` v záznamu běhu
 
-## Ladění balancování
+## Balancování
 
 Všechny číselné hodnoty jsou v objektu `CONFIG` na začátku skriptu.
-Křivka obtížnosti (§6.1) je v `CONFIG.difficulty`; za hranicí 4 minut
-pokračuje `tail` fáze, aby každý běh skončil.
+Za koncem křivky pokračuje `tail` fáze, aby každý běh skončil.
 
-Naměřeno v aktuálním nastavení: hráč, který stojí uprostřed a nehýbe se,
-vydrží ~165 s a nasbírá ~6 700 bodů. První extra život je na 25 000.
-Po prvních hraních bude nejspíš potřeba doladit — pak inkrementovat
-`CONFIG.rulesVersion`.
+### rulesVersion 2 — po prvním hraní
+
+Zpětná vazba: střelba měla vysokou kadenci, pasivní hraní stačilo.
+
+| | v1 (dle §6.1) | v2 |
+|---|---|---|
+| kadence střelby | 500 ms | 620 ms |
+| náběh křivky | 240 s | 110 s |
+| interval spawnu | 1400 → 350 ms | 1000 → 200 ms |
+| rychlost pádu | 90 → 260 px/s | 90 → 320 px/s |
+| body za objekt | 100 / 250 / 400 | 200 / 500 / 800 |
+
+Prahy pro extra život (§6.2) zůstávají 25 000 / 60 000 / 110 000 / 180 000.
+Bodové hodnoty jsou zdvojnásobené proto, že při kratších bězích by se jich
+s původním bodováním nedalo dosáhnout a celý systém extra životů by zůstal
+neotestovaný.
+
+### Naměřeno
+
+Dvěma automatickými hráči: **pasivní** stojí uprostřed a jen střílí,
+**aktivní** je jednoduchý bot uhýbající hrozbám (strop, člověk bude níž).
+Medián z 8 běhů:
+
+| | pasivní | aktivní bot |
+|---|---|---|
+| v1 — délka běhu | 201 s | 345 s |
+| **v2 — délka běhu** | **120 s** | **154 s** |
+| v2 — skóre | 34 300 | 52 100 |
+| v2 — běhy s extra životem | 1/8 | 3/8 |
+
+Poznámka k trhavému pohybu: **sám o sobě hru neztížil, spíš naopak.** Riziko,
+které uhýbá do strany, se stojícímu hráči často vyhne samo — v měření vydržel
+bot s trhavými riziky déle než s rovně padajícími. Přínos úhybu je v tom, že
+se nedá zamířit dopředu; obtížnost přidala až křivka spawnu.
+
+Změřeno botem, ne člověkem. Skutečné číslo dá až hraní — pak zase upravit
+`CONFIG` a inkrementovat `rulesVersion`.
 
 ## Otázky k ověření na prototypu (§10)
 
