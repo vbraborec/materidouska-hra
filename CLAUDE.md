@@ -15,3 +15,11 @@ a oddíl založ podle jeho README (sekce „Jak se to používá"). Řekni to
 uživateli.
 
 Nové poučení, které platí i mimo tenhle projekt, zapisuj do `pouceni`, ne sem.
+
+## Projektový dokument a Poslední revize
+
+Projekt má dokument `[Hra]` ve složce Projekty na Disku. **Po každé změně
+projektu (primárně po nasazení) nastav v jeho hlavičce řádek Poslední revize
+na datum změny** — uživatel to nemá dělat ručně, zapomínalo by se. Postup a
+mapování složek na dokumenty: `docs/projektove-dokumenty.md` v repu
+`google-scripts`; pomůcka `tools/nastav-revizi.js` v repu `ranni-shrnuti`.
